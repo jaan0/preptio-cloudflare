@@ -1,0 +1,640 @@
+import nodemailer from 'nodemailer'
+import { resolveAppBaseUrl } from '@/lib/app-url'
+import { buildCampaignEmailHtml } from '@/lib/email-shell'
+
+const smtpUser = process.env.SMTP_USER
+const smtpPass = process.env.SMTP_PASSWORD || process.env.SMTP_PASS
+const smtpHost = process.env.SMTP_HOST
+const smtpPort = process.env.SMTP_PORT ? Number(process.env.SMTP_PORT) : undefined
+const smtpSecure = String(process.env.SMTP_SECURE || '').toLowerCase() === 'true'
+
+// Bulk campaigns can be routed to a dedicated provider (e.g. Brevo) so its
+// daily allowance stays separate from the low-volume transactional mail. When
+// the BREVO_* variables are absent everything falls back to the default SMTP
+// host, so this is safe to leave unconfigured.
+const brevoUser = process.env.BREVO_SMTP_USER
+const brevoPass = process.env.BREVO_SMTP_PASSWORD || process.env.BREVO_SMTP_PASS
+const brevoHost = process.env.BREVO_SMTP_HOST || (brevoUser ? 'smtp-relay.brevo.com' : undefined)
+const brevoPort = process.env.BREVO_SMTP_PORT ? Number(process.env.BREVO_SMTP_PORT) : undefined
+const brevoSecure = String(process.env.BREVO_SMTP_SECURE || '').toLowerCase() === 'true'
+
+const retentionFrom = process.env.SMTP_FROM || 'Preptio <support@preptio.com>'
+const campaignFrom = process.env.BREVO_SMTP_FROM || process.env.SMTP_FROM || 'Preptio <support@preptio.com>'
+
+// Transactional / retention pool: deliberately conservative. One connection and
+// at most 20 messages a minute so providers such as Gmail do not answer with
+// "454 Too many login attempts" after a few dozen sends.
+const SMTP_POOL_OPTIONS = {
+  pool: true,
+  maxConnections: 1,
+  maxMessages: 50,
+  rateDelta: 60_000,
+  rateLimit: 20,
+}
+
+// Campaign pool: bulk providers (Brevo) are built for volume, so we allow far
+// more messages a minute across a few connections. Together with the shorter
+// CAMPAIGN_SEND_DELAY_MS this lets a full audience finish inside a single
+// function invocation instead of being truncated by the runtime limit.
+const CAMPAIGN_POOL_OPTIONS = {
+  pool: true,
+  maxConnections: 3,
+  maxMessages: 300,
+  rateDelta: 60_000,
+  rateLimit: 300,
+}
+
+const transporter = smtpHost
+  ? nodemailer.createTransport({
+      host: smtpHost,
+      port: smtpPort || (smtpSecure ? 465 : 587),
+      secure: smtpSecure,
+      auth: smtpUser && smtpPass ? { user: smtpUser, pass: smtpPass } : undefined,
+      ...SMTP_POOL_OPTIONS,
+    })
+  : nodemailer.createTransport({
+      service: 'gmail',
+      auth: smtpUser && smtpPass ? { user: smtpUser, pass: smtpPass } : undefined,
+      ...SMTP_POOL_OPTIONS,
+    })
+
+// Campaigns use the dedicated bulk transport when configured; otherwise they
+// reuse the default host so existing deployments keep working unchanged.
+const campaignTransporter =
+  brevoUser && brevoPass
+    ? nodemailer.createTransport({
+        host: brevoHost,
+        port: brevoPort || (brevoSecure ? 465 : 587),
+        secure: brevoSecure,
+        auth: { user: brevoUser, pass: brevoPass },
+        ...CAMPAIGN_POOL_OPTIONS,
+      })
+    : transporter
+
+export async function sendOTPEmail(email: string, code: string) {
+  const mailOptions = {
+    from: 'Preptio <support@preptio.com>',
+    to: email,
+    subject: 'Super Admin Login - Verification Code',
+    html: `
+      <div style="font-family: sans-serif; max-width: 600px; margin: auto; border: 1px solid #e2e8f0; border-radius: 12px; padding: 40px; color: #1e293b;">
+        <h2 style="color: #16a34a; margin-top: 0;">Verification Code</h2>
+        <p>To finalize your Super Admin login, please enter the following verification code:</p>
+        <div style="background: #f8fafc; border-radius: 8px; padding: 20px; text-align: center; margin: 24px 0;">
+          <span style="font-size: 32px; font-weight: bold; letter-spacing: 0.2em; color: #0f172a;">${code}</span>
+        </div>
+        <p style="font-size: 14px; color: #64748b;">This code is valid for 10 minutes. If you did not request this login, please ignore this email.</p>
+        <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 32px 0;">
+        <p style="font-size: 12px; color: #94a3b8; text-align: center;">Preptio &copy; ${new Date().getFullYear()}</p>
+      </div>
+    `,
+  }
+
+  return transporter.sendMail(mailOptions)
+}
+
+export async function sendAdminOTPEmail(email: string, code: string) {
+  const mailOptions = {
+    from: 'Preptio <support@preptio.com>',
+    to: email,
+    subject: 'Admin Login - Verification Code',
+    html: `
+      <div style="font-family: sans-serif; max-width: 600px; margin: auto; border: 1px solid #e2e8f0; border-radius: 12px; padding: 40px; color: #1e293b;">
+        <h2 style="color: #16a34a; margin-top: 0;">Verification Code</h2>
+        <p>To finalize your Admin login, please enter the following verification code:</p>
+        <div style="background: #f8fafc; border-radius: 8px; padding: 20px; text-align: center; margin: 24px 0;">
+          <span style="font-size: 32px; font-weight: bold; letter-spacing: 0.2em; color: #0f172a;">${code}</span>
+        </div>
+        <p style="font-size: 14px; color: #64748b;">This code is valid for 10 minutes. If you did not request this login, please ignore this email.</p>
+        <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 32px 0;">
+        <p style="font-size: 12px; color: #94a3b8; text-align: center;">Preptio &copy; ${new Date().getFullYear()}</p>
+      </div>
+    `,
+  }
+
+  return transporter.sendMail(mailOptions)
+}
+export async function sendPasswordResetEmail(
+  email: string,
+  token: string,
+  options?: { baseUrl?: string | null }
+) {
+  const appBaseUrl = resolveAppBaseUrl(options?.baseUrl)
+  const resetUrl = `${appBaseUrl}/auth/reset-password/${token}`
+
+  const mailOptions = {
+    from: 'Preptio <support@preptio.com>',
+    to: email,
+    subject: 'Reset Your Password - Preptio',
+    html: `
+      <div style="font-family: sans-serif; max-width: 600px; margin: auto; border: 1px solid #e2e8f0; border-radius: 12px; padding: 40px; color: #1e293b;">
+        <h2 style="color: #16a34a; margin-top: 0;">Password Reset</h2>
+        <p>You requested a password reset for your Preptio account. Click the button below to set a new password:</p>
+        <div style="text-align: center; margin: 32px 0;">
+          <a href="${resetUrl}" style="background: #16a34a; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: bold; display: inline-block;">Reset Password</a>
+        </div>
+        <p>If the button doesn't work, copy and paste this link into your browser:</p>
+        <p style="word-break: break-all; color: #64748b; font-size: 14px;">${resetUrl}</p>
+        <p style="font-size: 14px; color: #64748b;">This link is valid for 1 hour. If you did not request a password reset, please ignore this email.</p>
+        <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 32px 0;">
+        <p style="font-size: 12px; color: #94a3b8; text-align: center;">Preptio &copy; ${new Date().getFullYear()}</p>
+      </div>
+    `,
+  }
+
+  return transporter.sendMail(mailOptions)
+}
+
+export async function sendSignupVerificationEmail(email: string, code: string) {
+  const mailOptions = {
+    from: 'Preptio <support@preptio.com>',
+    to: email,
+    subject: 'Verify Your Email - Preptio',
+    html: `
+      <div style="font-family: sans-serif; max-width: 600px; margin: auto; border: 1px solid #e2e8f0; border-radius: 12px; padding: 40px; color: #1e293b;">
+        <h2 style="color: #16a34a; margin-top: 0;">Email Verification</h2>
+        <p>Thanks for signing up! Use the code below to verify your email address:</p>
+        <div style="background: #f8fafc; border-radius: 8px; padding: 20px; text-align: center; margin: 24px 0;">
+          <span style="font-size: 32px; font-weight: bold; letter-spacing: 0.2em; color: #0f172a;">${code}</span>
+        </div>
+        <p style="font-size: 14px; color: #64748b;">This code is valid for 10 minutes. If you did not request this, please ignore this email.</p>
+        <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 32px 0;">
+        <p style="font-size: 12px; color: #94a3b8; text-align: center;">Preptio &copy; ${new Date().getFullYear()}</p>
+      </div>
+    `,
+  }
+
+  return transporter.sendMail(mailOptions)
+}
+
+export async function sendAccountDeletionOTPEmail(email: string, code: string) {
+  const mailOptions = {
+    from: 'Preptio <support@preptio.com>',
+    to: email,
+    subject: 'Account Deletion - Verification Code',
+    html: `
+      <div style="font-family: sans-serif; max-width: 600px; margin: auto; border: 1px solid #e2e8f0; border-radius: 12px; padding: 40px; color: #1e293b;">
+        <h2 style="color: #dc2626; margin-top: 0;">Confirm Account Deletion</h2>
+        <p>We received a request to permanently delete your Preptio account. Enter the code below to continue:</p>
+        <div style="background: #f8fafc; border-radius: 8px; padding: 20px; text-align: center; margin: 24px 0;">
+          <span style="font-size: 32px; font-weight: bold; letter-spacing: 0.2em; color: #0f172a;">${code}</span>
+        </div>
+        <p style="font-size: 14px; color: #64748b;">This code is valid for 10 minutes. If you did not request this, please secure your account.</p>
+        <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 32px 0;">
+        <p style="font-size: 12px; color: #94a3b8; text-align: center;">Preptio &copy; ${new Date().getFullYear()}</p>
+      </div>
+    `,
+  }
+
+  return transporter.sendMail(mailOptions)
+}
+
+export async function sendReviewDueEmail(email: string, name: string, count: number) {
+  const reviewUrl = `${resolveAppBaseUrl()}/review`
+
+  const mailOptions = {
+    from: 'Preptio <support@preptio.com>',
+    to: email,
+    subject: 'Review Due - Preptio',
+    html: `
+      <div style="font-family: sans-serif; max-width: 600px; margin: auto; border: 1px solid #e2e8f0; border-radius: 12px; padding: 40px; color: #1e293b;">
+        <h2 style="color: #16a34a; margin-top: 0;">Your Review Queue is Ready</h2>
+        <p>Hi ${name || 'there'},</p>
+        <p>You have <strong>${count}</strong> questions due for spaced repetition today.</p>
+        <div style="text-align: center; margin: 32px 0;">
+          <a href="${reviewUrl}" style="background: #16a34a; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: bold; display: inline-block;">Start Review</a>
+        </div>
+        <p style="font-size: 14px; color: #64748b;">Consistent review helps you retain concepts and perform better on exam day.</p>
+        <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 32px 0;">
+        <p style="font-size: 12px; color: #94a3b8; text-align: center;">Preptio &copy; ${new Date().getFullYear()}</p>
+      </div>
+    `,
+  }
+
+  return transporter.sendMail(mailOptions)
+}
+
+export async function sendCampaignEmail(email: string, subject: string, body: string) {
+  if (!(brevoUser && brevoPass) && (!smtpUser || !smtpPass)) {
+    throw new Error(
+      'Email is not configured. Set BREVO_SMTP_USER/BREVO_SMTP_PASSWORD for campaigns, or SMTP_USER/SMTP_PASSWORD.'
+    )
+  }
+
+  const mailOptions = {
+    from: campaignFrom,
+    to: email,
+    subject,
+    // Rendered through the shared mobile-first shell so every campaign email
+    // looks right on phones (padding, headings and buttons all collapse).
+    html: buildCampaignEmailHtml(body),
+  }
+
+  return campaignTransporter.sendMail(mailOptions)
+}
+
+/**
+ * Low-volume transactional / retention mail (activation drip, streak
+ * reminders). Always uses the default SMTP host, never the bulk campaign
+ * provider, so the two streams keep separate daily allowances.
+ */
+export async function sendRetentionEmail(email: string, subject: string, body: string) {
+  if (!smtpUser || !smtpPass) {
+    throw new Error('Email is not configured. Set SMTP_USER and SMTP_PASS (or SMTP_PASSWORD).')
+  }
+
+  const mailOptions = {
+    from: retentionFrom,
+    to: email,
+    subject,
+    html: buildCampaignEmailHtml(body),
+  }
+
+  return transporter.sendMail(mailOptions)
+}
+
+export async function sendQuestionReportReceivedEmail(email: string, details: { subject?: string; questionNumber?: number; questionText?: string }) {
+  const subjectLine = details.subject ? `Subject: ${details.subject}` : 'Subject: N/A'
+  const questionLine = typeof details.questionNumber === 'number' ? `Question #${details.questionNumber}` : 'Question: N/A'
+  const questionText = details.questionText ? details.questionText : 'Question text not available.'
+
+  const mailOptions = {
+    from: 'Preptio <support@preptio.com>',
+    to: email,
+    subject: 'We received your question report',
+    html: `
+      <div style="font-family: sans-serif; max-width: 600px; margin: auto; border: 1px solid #e2e8f0; border-radius: 12px; padding: 40px; color: #1e293b;">
+        <h2 style="color: #16a34a; margin-top: 0;">Thanks for your report</h2>
+        <p>We have received your report and will review it shortly. We will notify you after checking.</p>
+        <div style="background: #f8fafc; border-radius: 8px; padding: 16px; margin: 24px 0;">
+          <p style="margin: 0; font-size: 14px; color: #475569;"><strong>${subjectLine}</strong></p>
+          <p style="margin: 6px 0 0; font-size: 14px; color: #475569;">${questionLine}</p>
+          <p style="margin: 10px 0 0; font-size: 14px; color: #475569;">${questionText}</p>
+        </div>
+        <p style="font-size: 14px; color: #64748b;">If you have more details, you can reply to this email.</p>
+        <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 32px 0;">
+        <p style="font-size: 12px; color: #94a3b8; text-align: center;">Preptio &copy; ${new Date().getFullYear()}</p>
+      </div>
+    `,
+  }
+
+  return transporter.sendMail(mailOptions)
+}
+
+export async function sendQuestionReportReplyEmail(email: string, message: string, details?: { subject?: string; questionNumber?: number; questionText?: string }) {
+  const subjectLine = details?.subject ? `Subject: ${details.subject}` : 'Subject: N/A'
+  const questionLine = typeof details?.questionNumber === 'number' ? `Question #${details.questionNumber}` : 'Question: N/A'
+  const questionText = details?.questionText ? details.questionText : 'Question text not available.'
+
+  const mailOptions = {
+    from: 'Preptio <support@preptio.com>',
+    to: email,
+    subject: 'Update on your question report',
+    html: `
+      <div style="font-family: sans-serif; max-width: 600px; margin: auto; border: 1px solid #e2e8f0; border-radius: 12px; padding: 40px; color: #1e293b;">
+        <h2 style="color: #16a34a; margin-top: 0;">Report update</h2>
+        <div style="background: #f8fafc; border-radius: 8px; padding: 16px; margin: 16px 0;">
+          <p style="margin: 0; font-size: 14px; color: #475569;"><strong>${subjectLine}</strong></p>
+          <p style="margin: 6px 0 0; font-size: 14px; color: #475569;">${questionLine}</p>
+          <p style="margin: 10px 0 0; font-size: 14px; color: #475569;">${questionText}</p>
+        </div>
+        <p>Thanks for helping us improve. Here is an update from our team:</p>
+        <div style="background: #f8fafc; border-radius: 8px; padding: 16px; margin: 24px 0; color: #475569;">
+          ${message}
+        </div>
+        <p style="font-size: 14px; color: #64748b;">If you have more details, you can reply to this email.</p>
+        <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 32px 0;">
+        <p style="font-size: 12px; color: #94a3b8; text-align: center;">Preptio &copy; ${new Date().getFullYear()}</p>
+      </div>
+    `,
+  }
+
+  return transporter.sendMail(mailOptions)
+}
+
+export async function sendQuestionReportAdminEmail(
+  recipients: string[],
+  payload: {
+    reporterEmail: string
+    reason: string
+    subject?: string
+    questionNumber?: number
+    questionText?: string
+  }
+) {
+  if (!recipients.length) return null
+
+  const subjectLine = payload.subject ? `Subject: ${payload.subject}` : 'Subject: N/A'
+  const questionLine = typeof payload.questionNumber === 'number' ? `Question #${payload.questionNumber}` : 'Question: N/A'
+  const questionText = payload.questionText ? payload.questionText : 'Question text not available.'
+
+  const mailOptions = {
+    from: 'Preptio <support@preptio.com>',
+    to: recipients.join(','),
+    subject: 'New Question Report Submitted',
+    html: `
+      <div style="font-family: sans-serif; max-width: 650px; margin: auto; border: 1px solid #e2e8f0; border-radius: 12px; padding: 32px; color: #1e293b;">
+        <h2 style="color: #16a34a; margin-top: 0;">New Question Report</h2>
+        <p><strong>Reporter:</strong> ${payload.reporterEmail || 'Unknown'}</p>
+        <div style="background: #f8fafc; border-radius: 8px; padding: 16px; margin: 16px 0;">
+          <p style="margin: 0; font-size: 14px; color: #475569;"><strong>${subjectLine}</strong></p>
+          <p style="margin: 6px 0 0; font-size: 14px; color: #475569;">${questionLine}</p>
+          <p style="margin: 10px 0 0; font-size: 14px; color: #475569;">${questionText}</p>
+        </div>
+        <p><strong>Report Reason:</strong></p>
+        <div style="background: #f8fafc; border-radius: 8px; padding: 16px; color: #475569; white-space: pre-wrap;">
+          ${payload.reason}
+        </div>
+      </div>
+    `,
+  }
+
+  return transporter.sendMail(mailOptions)
+}
+
+export async function sendFinancialStatementReportReceivedEmail(
+  email: string,
+  details: { caseNumber?: string; caseTitle?: string; section?: string; heading?: string }
+) {
+  const caseLine = details.caseNumber ? `Case: ${details.caseNumber}` : 'Case: N/A'
+  const titleLine = details.caseTitle ? details.caseTitle : 'Financial Statement Case'
+  const itemLine = details.heading ? `${details.section || 'Section'} - ${details.heading}` : details.section || 'Line item'
+
+  const mailOptions = {
+    from: 'Preptio <support@preptio.com>',
+    to: email,
+    subject: 'We received your financial statement report',
+    html: `
+      <div style="font-family: sans-serif; max-width: 600px; margin: auto; border: 1px solid #e2e8f0; border-radius: 12px; padding: 40px; color: #1e293b;">
+        <h2 style="color: #16a34a; margin-top: 0;">Thanks for your report</h2>
+        <p>We have received your report and will review it shortly. We will notify you after checking.</p>
+        <div style="background: #f8fafc; border-radius: 8px; padding: 16px; margin: 24px 0;">
+          <p style="margin: 0; font-size: 14px; color: #475569;"><strong>${caseLine}</strong></p>
+          <p style="margin: 6px 0 0; font-size: 14px; color: #475569;">${titleLine}</p>
+          <p style="margin: 10px 0 0; font-size: 14px; color: #475569;">${itemLine}</p>
+        </div>
+        <p style="font-size: 14px; color: #64748b;">If you have more details, you can reply to this email.</p>
+        <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 32px 0;">
+        <p style="font-size: 12px; color: #94a3b8; text-align: center;">Preptio &copy; ${new Date().getFullYear()}</p>
+      </div>
+    `,
+  }
+
+  return transporter.sendMail(mailOptions)
+}
+
+export async function sendFinancialStatementReportAdminEmail(
+  recipients: string[],
+  payload: {
+    reporterEmail: string
+    reason: string
+    caseNumber?: string
+    caseTitle?: string
+    section?: string
+    heading?: string
+  }
+) {
+  if (!recipients.length) return null
+
+  const caseLine = payload.caseNumber ? `Case: ${payload.caseNumber}` : 'Case: N/A'
+  const titleLine = payload.caseTitle || 'Financial Statement Case'
+  const itemLine = payload.heading ? `${payload.section || 'Section'} - ${payload.heading}` : payload.section || 'Line item'
+
+  const mailOptions = {
+    from: 'Preptio <support@preptio.com>',
+    to: recipients.join(','),
+    subject: 'New Financial Statement Report Submitted',
+    html: `
+      <div style="font-family: sans-serif; max-width: 650px; margin: auto; border: 1px solid #e2e8f0; border-radius: 12px; padding: 32px; color: #1e293b;">
+        <h2 style="color: #16a34a; margin-top: 0;">New Financial Statement Report</h2>
+        <p><strong>Reporter:</strong> ${payload.reporterEmail || 'Unknown'}</p>
+        <div style="background: #f8fafc; border-radius: 8px; padding: 16px; margin: 16px 0;">
+          <p style="margin: 0; font-size: 14px; color: #475569;"><strong>${caseLine}</strong></p>
+          <p style="margin: 6px 0 0; font-size: 14px; color: #475569;">${titleLine}</p>
+          <p style="margin: 10px 0 0; font-size: 14px; color: #475569;">${itemLine}</p>
+        </div>
+        <p><strong>Report Reason:</strong></p>
+        <div style="background: #f8fafc; border-radius: 8px; padding: 16px; color: #475569; white-space: pre-wrap;">
+          ${payload.reason}
+        </div>
+      </div>
+    `,
+  }
+
+  return transporter.sendMail(mailOptions)
+}
+
+export async function sendJoinUsThankYouEmail(email: string, name: string, type: string) {
+  const typeLabel = type === 'ambassador' ? 'Brand Ambassador' : type === 'reviews' ? 'Review & Feedback' : 'MCQ Data'
+  const mailOptions = {
+    from: 'Preptio <support@preptio.com>',
+    to: email,
+    subject: `Thank you for joining Preptio (${typeLabel})`,
+    html: `
+      <div style="font-family: sans-serif; max-width: 600px; margin: auto; border: 1px solid #e2e8f0; border-radius: 12px; padding: 40px; color: #1e293b;">
+        <h2 style="color: #16a34a; margin-top: 0;">Thank you, ${name || 'there'}!</h2>
+        <p>We appreciate your interest in helping Preptio grow.</p>
+        <p>Our team will review your submission and reach out soon.</p>
+        <div style="background: #f8fafc; border-radius: 8px; padding: 16px; margin: 24px 0; color: #475569;">
+          <strong>Category:</strong> ${typeLabel}
+        </div>
+        <p style="font-size: 14px; color: #64748b;">If you have more details, you can reply to this email.</p>
+        <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 32px 0;">
+        <p style="font-size: 12px; color: #94a3b8; text-align: center;">Preptio &copy; ${new Date().getFullYear()}</p>
+      </div>
+    `,
+  }
+  return transporter.sendMail(mailOptions)
+}
+
+export async function sendJoinUsReplyEmail(email: string, name: string, type: string, message: string) {
+  const typeLabel = type === 'ambassador' ? 'Brand Ambassador' : type === 'reviews' ? 'Review & Feedback' : 'MCQ Data'
+  const mailOptions = {
+    from: 'Preptio <support@preptio.com>',
+    to: email,
+    subject: `Your Preptio request update (${typeLabel})`,
+    html: `
+      <div style="font-family: sans-serif; max-width: 600px; margin: auto; border: 1px solid #e2e8f0; border-radius: 12px; padding: 40px; color: #1e293b;">
+        <h2 style="color: #16a34a; margin-top: 0;">Hello ${name || 'there'}</h2>
+        <p>Thank you for your interest in Preptio. Here is an update from our team:</p>
+        <div style="background: #f8fafc; border-radius: 8px; padding: 16px; margin: 24px 0; color: #475569;">
+          ${message}
+        </div>
+        <p style="font-size: 14px; color: #64748b;">Category: ${typeLabel}</p>
+        <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 32px 0;">
+        <p style="font-size: 12px; color: #94a3b8; text-align: center;">Preptio &copy; ${new Date().getFullYear()}</p>
+      </div>
+    `,
+  }
+  return transporter.sendMail(mailOptions)
+}
+
+export async function sendJoinUsAdminEmail(payload: {
+  name: string
+  email: string
+  phone?: string
+  institute?: string
+  role?: string
+  experience?: string
+  message?: string
+  type: string
+}) {
+  const typeLabel = payload.type === 'ambassador' ? 'Brand Ambassador' : payload.type === 'reviews' ? 'Review & Feedback' : 'MCQ Data'
+  const mailOptions = {
+    from: 'Preptio <support@preptio.com>',
+    to: process.env.SMTP_USER,
+    subject: `New Join Us submission (${typeLabel})`,
+    html: `
+      <div style="font-family: sans-serif; max-width: 650px; margin: auto; border: 1px solid #e2e8f0; border-radius: 12px; padding: 32px; color: #1e293b;">
+        <h2 style="color: #16a34a; margin-top: 0;">New Join Us Submission</h2>
+        <p><strong>Category:</strong> ${typeLabel}</p>
+        <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 16px 0;">
+        <p><strong>Name:</strong> ${payload.name}</p>
+        <p><strong>Email:</strong> ${payload.email}</p>
+        <p><strong>Phone:</strong> ${payload.phone || 'N/A'}</p>
+        <p><strong>Institute:</strong> ${payload.institute || 'N/A'}</p>
+        <p><strong>Role:</strong> ${payload.role || 'N/A'}</p>
+        <p><strong>Experience:</strong> ${payload.experience || 'N/A'}</p>
+        <p><strong>Message:</strong></p>
+        <div style="background: #f8fafc; border-radius: 8px; padding: 16px; color: #475569;">
+          ${payload.message || 'N/A'}
+        </div>
+      </div>
+    `,
+  }
+  return transporter.sendMail(mailOptions)
+}
+
+export async function sendInstituteSuggestionAdminEmail(payload: {
+  userName: string
+  userEmail: string
+  selectedInstitute: string
+}) {
+  const adminRecipient = process.env.SMTP_USER
+  if (!adminRecipient) return null
+
+  const mailOptions = {
+    from: 'Preptio <support@preptio.com>',
+    to: adminRecipient,
+    subject: 'New Institute Suggestion from Signup',
+    html: `
+      <div style="font-family: sans-serif; max-width: 650px; margin: auto; border: 1px solid #e2e8f0; border-radius: 12px; padding: 32px; color: #1e293b;">
+        <h2 style="color: #16a34a; margin-top: 0;">New Institute Suggestion</h2>
+        <p>A student signed up using an institute not in the dropdown list.</p>
+        <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 16px 0;">
+        <p><strong>Name:</strong> ${payload.userName}</p>
+        <p><strong>Email:</strong> ${payload.userEmail}</p>
+        <p><strong>Institute Entered:</strong> ${payload.selectedInstitute}</p>
+      </div>
+    `,
+  }
+
+  return transporter.sendMail(mailOptions)
+}
+
+export async function sendContactConfirmationEmail(payload: {
+  name: string
+  email: string
+  subject: string
+  message: string
+}) {
+  const mailOptions = {
+    from: 'Preptio <support@preptio.com>',
+    to: payload.email,
+    subject: 'We received your message - Preptio',
+    html: `
+      <div style="font-family: sans-serif; max-width: 600px; margin: auto; border: 1px solid #e2e8f0; border-radius: 12px; padding: 40px; color: #1e293b;">
+        <h2 style="color: #16a34a; margin-top: 0;">Thanks for reaching out, ${payload.name || 'there'}!</h2>
+        <p>We received your message and our team will get back to you soon.</p>
+        <div style="background: #f8fafc; border-radius: 8px; padding: 16px; margin: 24px 0; color: #475569;">
+          <p style="margin: 0; font-size: 14px;"><strong>Subject:</strong> ${payload.subject}</p>
+          <p style="margin: 10px 0 0; font-size: 14px; white-space: pre-wrap;">${payload.message}</p>
+        </div>
+        <p style="font-size: 14px; color: #64748b;">We appreciate your patience.</p>
+        <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 32px 0;">
+        <p style="font-size: 12px; color: #94a3b8; text-align: center;">Preptio &copy; ${new Date().getFullYear()}</p>
+      </div>
+    `,
+  }
+  return transporter.sendMail(mailOptions)
+}
+
+export async function sendContactAdminEmail(payload: {
+  name: string
+  email: string
+  subject: string
+  message: string
+}) {
+  const mailOptions = {
+    from: 'Preptio <support@preptio.com>',
+    to: process.env.SMTP_USER,
+    subject: `New Contact Message: ${payload.subject}`,
+    html: `
+      <div style="font-family: sans-serif; max-width: 650px; margin: auto; border: 1px solid #e2e8f0; border-radius: 12px; padding: 32px; color: #1e293b;">
+        <h2 style="color: #16a34a; margin-top: 0;">New Contact Message</h2>
+        <p><strong>Name:</strong> ${payload.name}</p>
+        <p><strong>Email:</strong> ${payload.email}</p>
+        <p><strong>Subject:</strong> ${payload.subject}</p>
+        <p><strong>Message:</strong></p>
+        <div style="background: #f8fafc; border-radius: 8px; padding: 16px; color: #475569; white-space: pre-wrap;">
+          ${payload.message}
+        </div>
+      </div>
+    `,
+  }
+  return transporter.sendMail(mailOptions)
+}
+
+export async function sendSecurityAlertEmail(email: string, name?: string) {
+  const resetUrl = `${resolveAppBaseUrl()}/auth/forgot-password`
+
+  const mailOptions = {
+    from: 'Preptio <support@preptio.com>',
+    to: email,
+    subject: 'Security Alert: Multiple Login Attempts Detected',
+    html: `
+      <div style="font-family: sans-serif; max-width: 600px; margin: auto; border: 1px solid #e2e8f0; border-radius: 12px; padding: 40px; color: #1e293b;">
+        <h2 style="color: #dc2626; margin-top: 0;">Security Alert</h2>
+        <p>Hello ${name || 'there'},</p>
+        <p>Someone tried to access your Preptio account multiple times. If this was not you please reset your password immediately.</p>
+        <div style="text-align: center; margin: 28px 0;">
+          <a href="${resetUrl}" style="background: #16a34a; color: white; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: bold; display: inline-block;">
+            Reset Password
+          </a>
+        </div>
+        <p style="font-size: 14px; color: #64748b;">If this was you, you can ignore this message.</p>
+        <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 32px 0;">
+        <p style="font-size: 12px; color: #94a3b8; text-align: center;">Preptio &copy; ${new Date().getFullYear()}</p>
+      </div>
+    `,
+  }
+
+  return transporter.sendMail(mailOptions)
+}
+
+export async function sendOrgInviteEmail(
+  email: string,
+  payload: { orgName: string; role: string; acceptUrl: string; expiresInDays: number }
+) {
+  const esc = (v: string) =>
+    v.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+  const mailOptions = {
+    from: 'Preptio <support@preptio.com>',
+    to: email,
+    subject: `You're invited to join ${payload.orgName} on Preptio`,
+    html: `
+      <div style="font-family: sans-serif; max-width: 600px; margin: auto; border: 1px solid #e2e8f0; border-radius: 12px; padding: 40px; color: #1e293b;">
+        <h2 style="color: #16a34a; margin-top: 0;">You're invited</h2>
+        <p><strong>${esc(payload.orgName)}</strong> has invited you to join Preptio as ${esc(payload.role)}.</p>
+        <p>If you accept, the institute will be able to see your practice results from the day you join. You can review what is shared and decline on the next page.</p>
+        <div style="text-align: center; margin: 28px 0;">
+          <a href="${esc(payload.acceptUrl)}" style="background: #16a34a; color: #fff; padding: 12px 22px; border-radius: 8px; text-decoration: none; font-weight: bold;">Review invitation</a>
+        </div>
+        <p style="font-size: 14px; color: #64748b;">This invitation expires in ${payload.expiresInDays} days. Sign in with this email address to accept it.</p>
+        <hr style="border: 0; border-top: 1px solid #e2e8f0; margin: 32px 0;">
+        <p style="font-size: 12px; color: #94a3b8; text-align: center;">Preptio &copy; ${new Date().getFullYear()}</p>
+      </div>
+    `,
+  }
+  return transporter.sendMail(mailOptions)
+}

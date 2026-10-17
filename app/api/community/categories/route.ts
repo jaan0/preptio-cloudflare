@@ -1,0 +1,25 @@
+import { prisma } from '@/lib/prisma'
+import { NextResponse } from 'next/server'
+
+export async function GET() {
+  try {
+    const categories = await prisma.communityCategory.findMany({
+      where: { isHidden: false },
+      orderBy: { displayOrder: 'asc' },
+      select: {
+        id: true,
+        name: true,
+        slug: true,
+        description: true,
+      },
+    })
+
+    return NextResponse.json({ categories })
+  } catch (error) {
+    console.error('Community categories error:', error)
+    return NextResponse.json(
+      { error: 'Subjects are temporarily unavailable. Please try again shortly.' },
+      { status: 503 }
+    )
+  }
+}
