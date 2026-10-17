@@ -35,8 +35,7 @@
 		// see https://opennext.js.org/cloudflare/howtos/image
 		"binding": "IMAGES"
 	},
-	"triggers": [
-		{ "name": "streak-reconciliation", "cron": "5 0 * * *" },
-		{ "name": "email-campaigns", "cron": "0 15 * * *" }
-	]
+	"triggers": {
+		"crons": ["5 0 * * *", "0 15 * * *"]
+	}
 }
