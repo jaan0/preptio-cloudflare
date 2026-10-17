@@ -1,8 +1,15 @@
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
+import { setPrismaDb } from '@/lib/prisma'
 
-export function middleware(request: NextRequest) {
+export async function middleware(request: NextRequest) {
   const response = NextResponse.next()
+
+  // Initialize Prisma with D1 binding from Cloudflare Pages environment
+  const env = (request as any).env || (request as any).context?.env
+  if (env?.DB) {
+    setPrismaDb(env.DB)
+  }
 
   // For HTML pages, prevent caching to ensure latest version is always fetched
   if (request.nextUrl.pathname === '/' || request.nextUrl.pathname.endsWith('.html')) {
@@ -20,7 +27,6 @@ export function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
-    // Match all routes except these
     '/((?!_next/static|_next/image|favicon.ico|robots.txt|sitemap.xml).*)',
   ],
 }

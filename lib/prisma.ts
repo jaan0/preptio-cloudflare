@@ -6,13 +6,10 @@ const globalForPrisma = global as unknown as {
 }
 
 let prismaInstance: PrismaClient | null = null
+let isInitialized = false
 
-/**
- * Initialize Prisma with a D1 database binding.
- * Call this from middleware or route handlers with `context.env.DB`.
- */
 export function setPrismaDb(db: unknown): void {
-  if (!prismaInstance) {
+  if (!isInitialized) {
     prismaInstance = new PrismaClient({
       adapter: new PrismaD1({ db: db as any }),
       log:
@@ -21,21 +18,26 @@ export function setPrismaDb(db: unknown): void {
           : ['error'],
     })
     globalForPrisma.prisma = prismaInstance
+    isInitialized = true
   }
 }
 
-/**
- * Get the Prisma client instance. Initializes with `db` if provided and not yet initialized.
- */
 export function getPrisma(db?: unknown): PrismaClient {
-  if (db && !prismaInstance) {
+  if (db && !isInitialized) {
     setPrismaDb(db)
   }
+
+  // Fallback: return existing instance or create one without adapter (for build time / safety)
   if (!prismaInstance) {
-    throw new Error(
-      'Prisma D1 binding not initialized. Call setPrismaDb(db) from middleware or route handler first.'
-    )
+    prismaInstance = new PrismaClient({
+      log:
+        process.env.NODE_ENV === 'development'
+          ? ['error', 'warn']
+          : ['error'],
+    })
+    globalForPrisma.prisma = prismaInstance
   }
+
   return prismaInstance
 }
 
