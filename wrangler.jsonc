@@ -10,9 +10,6 @@
 			"enabled": true,
 			"head_sampling_rate": 1,
 			"persist": true
-		},
-		"issue_detection": {
-			"enabled": true
 		}
 	},
 	"$schema": "node_modules/wrangler/config-schema.json",
@@ -44,6 +41,14 @@
 			// You can change the bucket name if you want
 			// See https://developers.cloudflare.com/workers/wrangler/commands/#r2-bucket-create
 			"bucket_name": "preptio-opennext-cache-jaan0"
+		}
+	],
+	"d1_databases": [
+		{
+			// REPLACE WITH YOUR ACTUAL D1 DATABASE ID AFTER RUNNING: wrangler d1 create preptio-db
+			"binding": "DB",
+			"database_name": "preptio-db",
+			"database_id": "d159527f-b952-49f8-b707-9959fa24906c"
 		}
 	],
 	"images": {

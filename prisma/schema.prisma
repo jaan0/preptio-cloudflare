@@ -1,5 +1,5 @@
 datasource db {
-  provider = "postgresql"
+  provider = "sqlite"
 }
 
 generator client {
@@ -347,10 +347,10 @@ model Question {
   questionNumber Int
   question      String
   imageUrl      String?
-  options       String[]
-  optionImageUrls String[] @default([])
+  options       String
+  optionImageUrls String @default("")
   correctAnswer Int?
-  correctAnswers Int[] @default([])
+  correctAnswers String @default("")
   allowMultiple Boolean            @default(false)
   maxSelections Int                @default(2)
   explanation   String
@@ -747,7 +747,7 @@ model FinancialStatementCase {
   defaultTimeLimit   Int      @default(45)
   isActive           Boolean  @default(true)
   showThousandsNote  Boolean  @default(false)
-  totalMarks         Decimal  @default(20.00) @db.Decimal(5, 2)
+  totalMarks         Float  @default(20.00) 
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
@@ -764,7 +764,7 @@ model SociLineItem {
   inputType      FinancialStatementInputType @default(dropdown)
   dropdownOptions Json
   correctValue   String
-  marks          Decimal  @db.Decimal(5, 2)
+  marks          Float  
   displayOrder   Int
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
@@ -783,7 +783,7 @@ model SofpLineItem {
   groupLabel     String?
   dropdownOptions Json
   correctValue   String
-  marks          Decimal  @db.Decimal(5, 2)
+  marks          Float  
   displayOrder   Int
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
@@ -801,9 +801,9 @@ model FinancialStatementAttempt {
   caseNumber          String
   sociAnswers         Json
   sofpAnswers         Json
-  totalMarksObtained  Decimal  @db.Decimal(5, 2)
-  totalMarks          Decimal  @default(20.00) @db.Decimal(5, 2)
-  percentageScore     Decimal  @db.Decimal(5, 2)
+  totalMarksObtained  Float  
+  totalMarks          Float  @default(20.00) 
+  percentageScore     Float  
   timeSpent           Int
   timeLimitSet        Int
   startedAt           DateTime
@@ -823,8 +823,8 @@ model UserFsProgress {
   id            Int      @id @default(autoincrement())
   userId        String   @unique
   totalAttempts Int      @default(0)
-  averageScore  Decimal  @default(0.00) @db.Decimal(5, 2)
-  bestScore     Decimal  @default(0.00) @db.Decimal(5, 2)
+  averageScore  Float  @default(0.00) 
+  bestScore     Float  @default(0.00) 
   casesCompleted Json    @default("[]")
   updatedAt     DateTime @updatedAt
 
@@ -880,7 +880,7 @@ model IpActivityLog {
   activityType   SecurityActivityType @map("activity_type")
   targetUserId   String?            @map("target_user_id")
   targetEndpoint String?            @map("target_endpoint")
-  attemptedEmail String?            @map("attempted_email") @db.VarChar(255)
+  attemptedEmail String?            @map("attempted_email") 
   attemptsCount  Int                @default(1) @map("attempts_count")
   firstSeen      DateTime           @default(now()) @map("first_seen")
   lastSeen       DateTime           @default(now()) @map("last_seen")
@@ -1224,7 +1224,7 @@ model BlogPost {
   id              String         @id @default(cuid())
   title           String
   slug            String         @unique
-  excerpt         String         @db.VarChar(300)
+  excerpt         String         
   content         String
   coverImageUrl   String?        @map("cover_image_url")
   authorId        String         @map("author_id")
@@ -1264,7 +1264,7 @@ model BlogRevision {
   postId         String               @map("post_id")
   title          String
   content        String
-  excerpt        String               @db.VarChar(300)
+  excerpt        String               
   coverImageUrl  String?              @map("cover_image_url")
   savedBy        String               @map("saved_by")
   saveType       BlogRevisionSaveType @map("save_type")

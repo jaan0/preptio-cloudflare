@@ -106,6 +106,7 @@
     "@next/bundle-analyzer": "^16.1.6",
     "@opennextjs/cloudflare": "^1.20.12",
     "@playwright/test": "^1.58.2",
+    "@prisma/adapter-d1": "^7.10.1",
     "@tailwindcss/postcss": "^4.1.9",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.0",
