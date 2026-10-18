@@ -26,18 +26,20 @@ export async function GET(request: NextRequest) {
     if (q.length > 120 || category.length > 80 || (postType && !isPostType(postType)) || !['', 'unanswered', 'solved'].includes(status) || !['all', 'saved', 'following'].includes(view) || !['day', 'week', 'month', 'all'].includes(range)) return NextResponse.json({ error: 'Invalid search or filter.' }, { status: 400 })
     if (view !== 'all' && !viewerId) return NextResponse.json({ error: 'Please log in to see your saved or followed discussions.' }, { status: 401 })
     const days = range === 'day' ? 1 : range === 'week' ? 7 : 30
-    // Rank the entire community in PostgreSQL. All user input is parameterized.
+    // Rank the entire community in SQL. All user input is parameterized.
+    // D1 runs SQLite, so the "hot" ranking uses strftime() for the thread age in
+    // hours instead of PostgreSQL's EXTRACT(EPOCH ...) / POWER(...).
     const ranking = sort === 'new' ? Prisma.sql`t.created_at DESC` : sort === 'top'
       ? Prisma.sql`COALESCE(v.score, 0) DESC`
-      : Prisma.sql`(CASE WHEN COALESCE(v.score, 0) > 0 THEN v.score / POWER(GREATEST(EXTRACT(EPOCH FROM (NOW() - t.created_at)) / 3600, 1) + 2, 0.8) ELSE COALESCE(v.score, 0) END) DESC`
+      : Prisma.sql`(CASE WHEN COALESCE(v.score, 0) > 0 THEN v.score / (MAX((julianday('now') - julianday(t.created_at)) * 24, 1) + 2) ELSE COALESCE(v.score, 0) END) DESC`
     const isModerator = ['admin', 'super_admin'].includes(getCurrentUser(request)?.role || '')
     const rows = await prisma.$queryRaw<{ id: string }[]>(Prisma.sql`
       SELECT t.id FROM community_threads t
       JOIN community_categories c ON c.id = t.category_id
-      LEFT JOIN (SELECT target_id, SUM(value)::double precision AS score FROM community_votes WHERE target_type = 'thread' GROUP BY target_id) v ON v.target_id = t.id
+      LEFT JOIN (SELECT target_id, SUM(value) AS score FROM community_votes WHERE target_type = 'thread' GROUP BY target_id) v ON v.target_id = t.id
       WHERE t.deleted = false ${isModerator ? Prisma.empty : Prisma.sql`AND c.is_hidden = false`} ${category ? Prisma.sql`AND c.slug = ${category}` : Prisma.empty}
-      ${q ? Prisma.sql`AND to_tsvector('simple', t.title || ' ' || t.body) @@ websearch_to_tsquery('simple', ${q})` : Prisma.empty}
-      ${postType ? Prisma.sql`AND t.post_type::text = ${postType}` : Prisma.empty}
+      ${q ? Prisma.sql`AND (t.title || ' ' || t.body) LIKE ${'%' + q + '%'}` : Prisma.empty}
+      ${postType ? Prisma.sql`AND t.post_type = ${postType}` : Prisma.empty}
       ${status === 'unanswered' ? Prisma.sql`AND t.post_type = 'question' AND t.solved_at IS NULL` : status === 'solved' ? Prisma.sql`AND t.post_type = 'question' AND t.solved_at IS NOT NULL` : Prisma.empty}
       ${view === 'saved' ? Prisma.sql`AND EXISTS (SELECT 1 FROM community_bookmarks b WHERE b.thread_id = t.id AND b.user_id = ${viewerId})` : view === 'following' ? Prisma.sql`AND EXISTS (SELECT 1 FROM community_follows f WHERE f.thread_id = t.id AND f.user_id = ${viewerId})` : Prisma.empty}
       ${sort === 'top' && range !== 'all' ? Prisma.sql`AND t.created_at >= ${new Date(Date.now() - days * 86400000)}` : Prisma.empty}

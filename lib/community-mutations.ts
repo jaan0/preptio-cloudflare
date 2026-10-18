@@ -22,8 +22,10 @@ export async function communityActor(request: NextRequest) {
 export async function mutationLimit(id: string) { return communityLimit(id, 'update', 60, 60) }
 
 // Serialize edits, removal, answers and new comments on the discussion row.
+// NOTE: the Neon/PostgreSQL build took a `SELECT ... FOR UPDATE` row lock here.
+// D1 runs SQLite, which has no `FOR UPDATE`; interactive transactions already
+// serialize the write, and all subsequent reads re-check `deleted`/`locked`.
 export async function lockThread(tx: Prisma.TransactionClient, id: string) {
-  await tx.$queryRaw(Prisma.sql`SELECT id FROM community_threads WHERE id = ${id} FOR UPDATE`)
   const thread = await tx.communityThread.findFirst({ where: { id, deleted: false } })
   if (!thread) throw new CommunityError('This discussion is no longer available.', 404)
   return thread
@@ -34,7 +36,7 @@ export async function clearAcceptedAnswer(tx: Prisma.TransactionClient, commentI
 export async function lockModerationTarget(tx: Prisma.TransactionClient, targetType: string, targetId: string) {
   const threadId = targetType === 'thread' ? targetId : (await tx.communityComment.findUnique({ where: { id: targetId }, select: { threadId: true } }))?.threadId
   if (!threadId) throw new CommunityError('Content not found.', 404)
-  await tx.$queryRaw(Prisma.sql`SELECT id FROM community_threads WHERE id = ${threadId} FOR UPDATE`)
+  // No `FOR UPDATE` on D1/SQLite — see the note on lockThread() above.
 }
 
 export async function notifyComment(tx: Prisma.TransactionClient, thread: { id: string; authorId: string }, comment: { id: string; authorId: string }, parentAuthorId?: string) {
