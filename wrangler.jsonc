@@ -57,6 +57,18 @@
 		"binding": "IMAGES"
 	},
 	"triggers": {
-		"crons": ["5 0 * * *", "0 15 * * *"]
-	}
+		"crons": [
+			"5 0 * * *",
+			"0 15 * * *"
+		]
+	},
+	"rules": [
+		{
+			"type": "CompiledWasm",
+			"globs": [
+				"**/*.wasm"
+			],
+			"fallthrough": true
+		}
+	]
 }
