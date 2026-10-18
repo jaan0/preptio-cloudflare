@@ -6,44 +6,43 @@ const globalForPrisma = global as unknown as {
 }
 
 let prismaInstance: PrismaClient | null = null
-let isInitialized = false
 
 export function setPrismaDb(db: unknown): void {
-  if (!isInitialized) {
+  if (!prismaInstance) {
     prismaInstance = new PrismaClient({
-      adapter: new PrismaD1({ db: db as any }),
+      adapter: new PrismaD1(db as any),
       log:
         process.env.NODE_ENV === 'development'
           ? ['error', 'warn']
-          : ['error'],
+          : [],
     })
     globalForPrisma.prisma = prismaInstance
-    isInitialized = true
   }
 }
 
 export function getPrisma(db?: unknown): PrismaClient {
-  if (db && !isInitialized) {
-    setPrismaDb(db)
+  if (prismaInstance) return prismaInstance
+
+  const dbInstance = db || (globalThis as any).DB || process.env.DB
+  if (!dbInstance) {
+    throw new Error(
+      'Prisma D1 binding not initialized. Call setPrismaDb(db) from middleware or route handler first.'
+    )
   }
 
-  // Fallback: return existing instance or create one without adapter (for build time / safety)
-  if (!prismaInstance) {
-    prismaInstance = new PrismaClient({
-      log:
-        process.env.NODE_ENV === 'development'
-          ? ['error', 'warn']
-          : ['error'],
-    })
-    globalForPrisma.prisma = prismaInstance
-  }
-
+  prismaInstance = new PrismaClient({
+    adapter: new PrismaD1(dbInstance as any),
+    log:
+      process.env.NODE_ENV === 'development'
+        ? ['error', 'warn']
+        : [],
+  })
+  globalForPrisma.prisma = prismaInstance
   return prismaInstance
 }
 
-// Backward-compatible singleton — delegates to the initialized instance
-export const prisma = new Proxy({}, {
-  get(target: unknown, prop: string) {
+export const prisma = new Proxy({} as PrismaClient, {
+  get(target: any, prop: string) {
     const instance = getPrisma()
     return (instance as PrismaClient)[prop as keyof PrismaClient]
   },
