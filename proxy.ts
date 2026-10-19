@@ -80,6 +80,7 @@ export default async function proxy(request: NextRequest) {
   const token = request.cookies.get('token')?.value
   const superAdminToken = request.cookies.get('super_admin_session')?.value
   const { pathname } = request.nextUrl
+  const returnPath = pathname + request.nextUrl.search
 
   const isAdminLoginPage = pathname === '/admin/login'
   const isAdminForgotPasswordPage = pathname === '/admin/forgot-password'
@@ -135,10 +136,10 @@ export default async function proxy(request: NextRequest) {
   }
 
   // Login/signup validate the session through /api/auth/me and then resolve returnTo.
-  // A cookie alone may be expired; redirecting it here also discards the requested discussion.
+  // A cookie alone may be expired; redirecting it here also discards the requested page.
 
   if (!isApiRoute && isProtectedRoute && !token) {
-    return applySecurityHeaders(NextResponse.redirect(new URL(authHref('login', pathname + request.nextUrl.search), request.url)), request)
+    return applySecurityHeaders(NextResponse.redirect(new URL(authHref('login', returnPath), request.url)), request)
   }
 
   if (!isApiRoute && isAdminRoute && token) {
@@ -152,7 +153,7 @@ export default async function proxy(request: NextRequest) {
         },
       })
       if (!meResponse.ok) {
-        return applySecurityHeaders(NextResponse.redirect(new URL('/auth/login', request.url)), request)
+        return applySecurityHeaders(NextResponse.redirect(new URL(authHref('login', returnPath), request.url)), request)
       }
       const meData = await meResponse.json()
       const role = meData?.user?.role
@@ -161,7 +162,7 @@ export default async function proxy(request: NextRequest) {
       }
     } catch (error) {
       console.error('Admin role check failed', error)
-      return applySecurityHeaders(NextResponse.redirect(new URL('/auth/login', request.url)), request)
+      return applySecurityHeaders(NextResponse.redirect(new URL(authHref('login', returnPath), request.url)), request)
     }
   }
 

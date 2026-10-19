@@ -59,7 +59,10 @@ type NavGroup = {
 const NAV_GROUPS: NavGroup[] = [
   {
     label: 'Communication',
-    items: [{ label: 'Email Campaigns', href: '/admin/email-campaigns', icon: Mail }],
+    items: [
+      { label: 'Email Campaigns', href: '/admin/email-campaigns', icon: Mail },
+      { label: 'Push Notifications', href: '/admin/push-notifications', icon: Bell },
+    ],
   },
   {
     label: 'Content Management',
@@ -140,6 +143,7 @@ const ADMIN_TITLE_OVERRIDES: Array<{ match: RegExp; title: string }> = [
   { match: /^\/admin\/payment-methods$/, title: 'Payment Methods' },
   { match: /^\/admin\/organizations$/, title: 'Organizations' },
   { match: /^\/admin\/email-campaigns$/, title: 'Email Campaigns' },
+  { match: /^\/admin\/push-notifications$/, title: 'Push Notifications' },
 ]
 
 function isActiveRoute(pathname: string, href: string) {

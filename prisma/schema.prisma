@@ -588,6 +588,33 @@ model PushSubscription {
   createdAt    DateTime @default(now())
 }
 
+model PushCampaign {
+  id               String   @id @default(cuid())
+  title            String
+  body             String
+  url              String   @default("/dashboard")
+  icon             String   @default("/web-app-manifest-192x192.png")
+  badge            String   @default("/web-app-manifest-192x192.png")
+  segment          String
+  specificEmails   String?
+  newWithinDays    Int      @default(1)
+  activeWithinDays Int      @default(7)
+  inactiveDays     Int      @default(14)
+  examDaysBefore   Int      @default(30)
+  totalTargeted    Int      @default(0)
+  sentCount        Int      @default(0)
+  failedCount      Int      @default(0)
+  cleanedCount     Int      @default(0)
+  status           String   @default("sent")
+  lastError        String?
+  sentBy           String?
+  sentAt           DateTime @default(now())
+  createdAt        DateTime @default(now())
+
+  @@index([createdAt])
+  @@map("push_campaigns")
+}
+
 /// One row per (user, kind, dayKey) — caps re-engagement pushes to a single
 /// send per user per day, acting as both a frequency cap and an idempotency key.
 model PushNotificationLog {
