@@ -6,10 +6,39 @@ import { authHref } from '@/lib/auth-redirect'
 const BLOCKED_MESSAGE =
   'Access Denied. Your IP address has been blocked due to suspicious activity. If you believe this is an error, contact support@preptio.com'
 
+type SelfFetcher = { fetch: (input: string | URL | Request, init?: RequestInit) => Promise<Response> }
+
+/**
+ * On Cloudflare Workers, a Worker that fetches its own public URL (for example
+ * https://<worker>.workers.dev/api/auth/me) is restricted and can fail or hang.
+ * wrangler.jsonc defines a WORKER_SELF_REFERENCE service binding that routes the
+ * request back into this same Worker without leaving Cloudflare's network.
+ * Falls back to a normal fetch when the binding is unavailable (e.g. next dev).
+ */
+function getSelfFetcher(): SelfFetcher | null {
+  try {
+    const ctx = (globalThis as unknown as Record<symbol, { env?: Record<string, unknown> } | undefined>)[
+      Symbol.for('__cloudflare-context__')
+    ]
+    const binding = ctx?.env?.WORKER_SELF_REFERENCE as Partial<SelfFetcher> | undefined
+    if (binding && typeof binding.fetch === 'function') {
+      return binding as SelfFetcher
+    }
+  } catch {
+    // No Cloudflare request context (local dev, build time) — use normal fetch.
+  }
+  return null
+}
+
+function internalFetch(url: URL, init: RequestInit): Promise<Response> {
+  const selfFetcher = getSelfFetcher()
+  return selfFetcher ? selfFetcher.fetch(url.toString(), init) : fetch(url, init)
+}
+
 async function fetchMaintenanceMode(request: NextRequest) {
   try {
     const statusUrl = new URL('/api/public/maintenance-status', request.url)
-    const response = await fetch(statusUrl, {
+    const response = await internalFetch(statusUrl, {
       cache: 'no-store',
       headers: {
         'x-preptio-internal': '1',
@@ -115,7 +144,7 @@ export default async function proxy(request: NextRequest) {
   if (!isApiRoute && isAdminRoute && token) {
     try {
       const meUrl = new URL('/api/auth/me', request.url)
-      const meResponse = await fetch(meUrl, {
+      const meResponse = await internalFetch(meUrl, {
         cache: 'no-store',
         headers: {
           cookie: request.headers.get('cookie') || '',
