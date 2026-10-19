@@ -10,6 +10,35 @@ import { useToast } from '@/hooks/use-toast'
 import { useAuth } from '@/lib/auth-context'
 
 const OTP_COOLDOWN_SECONDS = 60
+const DEFAULT_ADMIN_PATH = '/admin'
+
+/**
+ * Read the `returnTo` query param and only allow same-site admin paths.
+ * Rejects absolute URLs, protocol-relative URLs (//evil.com), backslash tricks,
+ * and loops back to the login page itself.
+ */
+function getSafeReturnTo(): string {
+  if (typeof window === 'undefined') return DEFAULT_ADMIN_PATH
+  const raw = new URLSearchParams(window.location.search).get('returnTo')
+  if (!raw) return DEFAULT_ADMIN_PATH
+
+  let decoded: string
+  try {
+    decoded = decodeURIComponent(raw)
+  } catch {
+    return DEFAULT_ADMIN_PATH
+  }
+
+  if (!decoded.startsWith('/')) return DEFAULT_ADMIN_PATH
+  if (decoded.startsWith('//')) return DEFAULT_ADMIN_PATH
+  if (decoded.includes('\\')) return DEFAULT_ADMIN_PATH
+  if (!decoded.startsWith('/admin')) return DEFAULT_ADMIN_PATH
+  if (decoded.startsWith('/admin/login') || decoded.startsWith('/admin/forgot-password')) {
+    return DEFAULT_ADMIN_PATH
+  }
+
+  return decoded
+}
 
 export default function AdminLoginPage() {
   const router = useRouter()
@@ -30,7 +59,7 @@ export default function AdminLoginPage() {
   useEffect(() => {
     if (loading) return
     if (user?.role === 'admin') {
-      router.replace('/admin')
+      router.replace(getSafeReturnTo())
       return
     }
     if (user) {
@@ -87,10 +116,10 @@ export default function AdminLoginPage() {
         description: error.message || 'An error occurred. Please try again.',
         variant: 'destructive',
       })
-  } finally {
-    setIsLoading(false)
+    } finally {
+      setIsLoading(false)
+    }
   }
-}
 
   useEffect(() => {
     if (step !== 'otp') return
@@ -180,7 +209,7 @@ export default function AdminLoginPage() {
         title: 'Success',
         description: 'Admin login successful. Redirecting...',
       })
-      router.push('/admin')
+      router.push(getSafeReturnTo())
     } catch (error: any) {
       toast({
         title: 'Verification failed',
